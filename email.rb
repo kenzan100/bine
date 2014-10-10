@@ -112,7 +112,7 @@ get '/' do
   end
 
   batch = Google::APIClient::BatchRequest.new
-  mail_ids[0..1].each do |id|
+  mail_ids.each do |id|
     batch.add(api_method: gmail_api.users.messages.get,
               parameters: { 'id' => id, 'userId' => 'me'}, #, 'format' => 'raw' },
               authorization: user_credentials)
@@ -123,15 +123,29 @@ get '/' do
   result.body.split(boundary).each do |could_be_msg|
     if could_be_msg.match(/{.+}/m)
       json_body = could_be_msg.match(/{.+}/m)[0]
-      msg = JSON.parse(json_body)
-      body = msg["payload"]["parts"] ? msg["payload"]["parts"].first : msg["payload"]
-      Gmail.find_or_create_by_mail_id(msg["id"],
-        snippet: msg["snippet"],
-        email:   msg["payload"]["headers"][0]["value"],
-        headers: msg["payload"]["headers"],
-        body:    Base64.urlsafe_decode64(body["body"]["data"])
-      )
+      original_msg = JSON.parse(json_body)
+      msg = original_msg["payload"]
+      begin
+        while msg["body"]["size"].to_i == 0
+          msg = msg["parts"].first
+        end
+        body = Base64.urlsafe_decode64(msg["body"]["data"])
+
+        gmail_msg = Gmail.new(
+          mail_id: original_msg["id"],
+          snippet: original_msg["snippet"],
+          email:   original_msg["payload"]["headers"][0]["value"],
+          headers: original_msg["payload"]["headers"],
+          body:    body
+        )
+      rescue => e
+        puts e
+        byebug
+      end
+
+      gmail_msg.save unless Gmail.exists?(mail_id: gmail_msg.mail_id)
     end
   end
   @msgs = Gmail.all
+  erb :msgs
 end

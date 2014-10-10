@@ -1,0 +1,4 @@
+client_secrets.json
+*-oauth2.json
+database.yml
+*.log

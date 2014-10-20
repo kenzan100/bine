@@ -1,0 +1,64 @@
+<html>
+  <head>
+    <!-- Latest compiled and minified CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css">
+
+    <!-- Optional theme -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap-theme.min.css">
+
+    <!-- Latest compiled and minified JavaScript -->
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.2.0/js/bootstrap.min.js"></script>
+  </head>
+  <body>
+    <div class="container">
+      <div class="row">
+        <div class="col-md-4">
+          logged in as <%= @current_user.email %>
+          <ul class="nav nav-pills nav-stacked">
+            <li>
+              <a href="/">
+                INBOX
+              </a>
+            </li>
+          </ul>
+        </div>
+
+        <div class="col-md-8">
+          <% @msgs_arr.sort_by{|msgs| msgs.last.sent_date}.reverse.each do |msgs| %>
+            <% msg = msgs.first %>
+            <div class="panel">
+              <div class="panel-heading">
+                <div class="panel-title">
+                  ignoring mails from <strong><%= msg.from_mail %></strong>
+                  <span style="float: right;">
+                    <%= msgs.last.sent_date %>
+                  </span>
+                </div>
+              </div>
+              <div class="panel-body">
+                <% msgs.each do |msg| %>
+                  <a href="https://mail.google.com/mail/u/0/#inbox/<%= msg.thread_id %>" target="_blank">
+                    <%= msg.snippet %>
+                  </a>
+                  <hr>
+                <% end %>
+
+                <form method="post" action="/ignore?id=<%=msg.id%>&reverse=true">
+                  <input value="bring back his mail to INBOX" type="submit" class="btn btn-default" />
+                </form>
+
+              </div>
+              <div class="panel-footer">
+                <% msg.labels.each do |label| %>
+                  <span class="label">
+                    <%= label.id_on_gmail %>
+                  </span>
+                <% end %>
+              </div>
+            </div>
+          <% end %>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

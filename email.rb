@@ -10,81 +10,68 @@ require 'google/api_client/auth/file_storage'
 require 'sinatra/reloader' if development?
 require 'logger'
 
-enable :sessions
+require_relative 'models/init'
 
-CREDENTIAL_STORE_FILE = "#{$0}-oauth2.json"
+enable :sessions
 
 ActiveRecord::Base.configurations = YAML.load_file('database.yml')
 ActiveRecord::Base.establish_connection(:development)
+use ActiveRecord::ConnectionAdapters::ConnectionManagement
 
-class Gmail < ActiveRecord::Base
+def api_client; settings.api_client end
+def gmail_api; settings.gmail end
+def oauth_api; settings.oauth2 end
+
+def current_user
+  User.find(session[:user_id]) if session[:user_id]
 end
-
-class Duplicate < ActiveRecord::Base
-end
-
-def logger; settings.logger end
-def api_client; settings.api_client; end
-def gmail_api; settings.gmail; end
 
 def user_credentials
-  # Build a per-request oauth credential based on token stored in session
-  # which allows us to use a shared API client.
   @authorization ||= (
+    token_hash = session[:user_id] ? User.find(session[:user_id]).token_hash : {}
     auth = api_client.authorization.dup
     auth.redirect_uri = to('/oauth2callback')
-    auth.update_token!(session)
+    auth.update_token!(token_hash)
     auth
   )
 end
 
 configure do
-  log_file = File.open('bye_bye_email.log', 'a+')
-  log_file.sync = true
-  logger = Logger.new(log_file)
-  logger.level = Logger::DEBUG
+  client = Google::APIClient.new(:application_name => 'bye bye email test', :application_version => '1.0.0')
+  client_secrets = Google::APIClient::ClientSecrets.load
+  client.authorization = client_secrets.to_authorization
+  client.authorization.scope = ['https://mail.google.com/',
+                                'https://www.googleapis.com/auth/gmail.modify',
+                                'https://www.googleapis.com/auth/userinfo.email']
 
-  client = Google::APIClient.new(
-    :application_name => 'bye bye email test',
-    :application_version => '1.0.0'
-  )
 
-  file_storage = Google::APIClient::FileStorage.new(CREDENTIAL_STORE_FILE)
-  if file_storage.authorization.nil?
-    client_secrets = Google::APIClient::ClientSecrets.load
-    client.authorization = client_secrets.to_authorization
-    client.authorization.scope = 'https://www.googleapis.com/auth/gmail.readonly'
-  else
-    client.authorization = file_storage.authorization
-  end
-
-  # Since we're saving the API definition to the settings, we're only retrieving
-  # it once (on server start) and saving it between requests.
-  # If this is still an issue, you could serialize the object and load it on
-  # subsequent runs.
   gmail = client.discovered_api('gmail', 'v1')
+  oauth = client.discovered_api('oauth2', 'v2')
 
-  set :logger, logger
   set :api_client, client
   set :gmail, gmail
+  set :oauth2, oauth
 end
 
 before do
-  # Ensure user has authorized the app
+  pass if %w(logout).include? request.path_info.split('/')[1]
   unless user_credentials.access_token || request.path_info =~ /\A\/oauth2/
     redirect to('/oauth2authorize')
   end
 end
 
 after do
-  # Serialize the access/refresh token to the session and credential store.
-  session[:access_token] = user_credentials.access_token
-  session[:refresh_token] = user_credentials.refresh_token
-  session[:expires_in] = user_credentials.expires_in
-  session[:issued_at] = user_credentials.issued_at
+  if user_credentials.refresh_token && user_credentials.expired?
+    user_credentials.fetch_access_token!
+    if current_user
+      current_user.update_token!(user_credentials)
+    end
+  end
+end
 
-  file_storage = Google::APIClient::FileStorage.new(CREDENTIAL_STORE_FILE)
-  file_storage.write_credentials(user_credentials)
+get '/logout' do
+  session[:user_id] = nil
+  redirect '/'
 end
 
 get '/oauth2authorize' do
@@ -96,56 +83,274 @@ get '/oauth2callback' do
   # Exchange token
   user_credentials.code = params[:code] if params[:code]
   user_credentials.fetch_access_token!
+  user_info = api_client.execute(api_method: oauth_api.userinfo.get,
+                                 parameters: { 'fields' => 'email' },
+                                 authorization: user_credentials)
+  email_address = JSON.parse(user_info.body)["email"]
+  user = User.find_or_initialize_by(email: email_address)
+  if user_credentials.refresh_token && user_credentials.expired?
+    user_credentials.fetch_access_token!
+  end
+  user.update_token!(user_credentials)
+  session[:user_id] = user.id
+
   redirect to('/')
 end
 
+# get '/compare' do
+#   user_info = api_client.execute(api_method: oauth2_api.userinfo.get,
+#                                  parameters: { 'fields' => 'email' },
+#                                  authorization: user_credentials)
+#   user_id = JSON.parse(user_info.body)["email"]
+#
+#   DIFF_THRESH = 0.8
+#   LABEL_NAME  = '[BBmail]/shared'
+#
+#   @same_msgs = []
+#   Gmail.where(email: user_id).each do |mail|
+#     Gmail.where("email != ?", user_id).each do |another_mail|
+#       unchanged = Diffy::Diff.new(mail.body, another_mail.body, allow_empty_diff: false)
+#                              .each_chunk
+#                              .reject{|part| part.match(/^(\+|-)/)}
+#                              .first
+#       if unchanged && (unchanged.length > (mail.body.length * DIFF_THRESH))
+#         @same_msgs << [mail.id, another_mail.id, unchanged]
+#       end
+#     end
+#   end
+#
+#   api_client.execute(api_method:  gmail_api.users.labels.create,
+#                      parameters:  {'userId' => 'me'},
+#                      body_object: {'messageListVisibility' => 'hide',
+#                                    'labelListVisibility'   => 'labelShow',
+#                                    'name' => LABEL_NAME},
+#                      authorization: user_credentials)
+#   #[FIXME] only call when label_name not exist
+#
+#   batch = Google::APIClient::BatchRequest.new
+#   @same_msgs.each do |msg_arr|
+#     dup_msg_id = Gmail.find(msg_arr.first).mail_id
+#     batch.add(api_method: gmail_api.users.messages.modify,
+#               parameters:  { 'id' => dup_msg_id,
+#                              'userId' => 'me'},
+#               body_object: {'removeLabelIds' => [],
+#                             'addLabelIds'    => ['INBOX']},
+#               authorization: user_credentials)
+#   end
+#   api_client.execute(batch, authorization: user_credentials)
+#   # unless result.status == 200
+#   #   puts "unsuccessful api call when trying to modify labels"
+#   #   byebug
+#   # end
+#
+#   erb :compare
+# end
+
 get '/' do
-  result = api_client.execute(api_method: gmail_api.users.messages.list,
-                              parameters: { 'userId' => 'me' },
+  DIFF_THRESH = 0.8
+  user = current_user
+  @current_user = user
+  ignoring_mails = Message.where("ignored_at IS NOT NULL").pluck(:from_mail).uniq
+  search_targets = Message.where("user_id != ?", user.id)
+
+  # [TODO] メッセージ全体のインポートの保存期間を設定して、
+  # 現在共有中の人を全員updateし終わっても同じ duplicateが見つからなかったら、それ以外の
+  # メールは削除する
+
+  # [TODO] 全文検索エンジン試す
+  # [TODO] Fwd と Reの違いを許容するオプションモード検討する
+  # Differ.diff_by_char(mail.subject, another_mail.subject).instance_variable_get(:@raw).last
+  @thread_hash = {}
+  rule_for_match = "message_protocol_id"
+  your_msgs = if ignoring_mails != []
+                user.messages.where("from_mail NOT IN (?)", ignoring_mails)
+              else
+                user.messages
+              end
+  your_msgs.each do |mail|
+    if same_mails = search_targets.where("#{rule_for_match} = ?", mail.read_attribute(rule_for_match))
+      if same_mails != []
+        @thread_hash[mail.thread_id] = same_mails.pluck(:user_id) + [user.id]
+      end
+    end
+  end
+
+  @ongoing_threads_hash = {}
+  @msgs_arr = []
+  @thread_hash.each do |thread_id, shared_with_user_ids|
+    msg_hash = {}
+    msg_hash[:msgs]                = Message.where(thread_id: thread_id).order('sent_date')
+    msg_hash[:assigned_to]         = Message.who_replied(msg_hash[:msgs])
+    msg_hash[:shared_with_user_ids] = shared_with_user_ids
+    if msg_hash[:assigned_to] && msg_hash[:msgs].last.from_mail != msg_hash[:assigned_to].email
+      @ongoing_threads_hash[msg_hash[:assigned_to].id] = @ongoing_threads_hash.fetch(msg_hash[:assigned_to].id, 0) + 1
+    end
+    @msgs_arr << msg_hash
+  end
+
+  @comparing_user = User.find_by(id: params[:id])
+  @only_new = params[:id] ? false : true
+  erb :shared_msgs
+end
+
+get '/ignoring' do
+  ignoring_mails = Message.where("ignored_at IS NOT NULL").pluck(:from_mail).uniq
+  @current_user = current_user
+  @msgs_arr = []
+  ignoring_mails.each do |from_mail|
+    @msgs_arr << Message.where(from_mail: from_mail).group(:subject).order('sent_date ASC')
+  end
+  erb :ignorings
+end
+
+get '/update' do
+  user = current_user
+  client_call = Proc.new do |pageToken|
+    api_client.execute(api_method: gmail_api.users.history.list,
+                       parameters: { 'userId'  => 'me',
+                                     'startHistoryId' => user.latest_thread_history_id.to_s,
+                                     'pageToken'      => pageToken },
+                       authorization: user_credentials )
+  end
+  results = []
+  result = client_call.call(nil)
+  json = JSON.parse(result.body)
+  results << json
+  while nextPageToken = json["nextPageToken"]
+    result = client_call.call(nextPageToken)
+    json = JSON.parse(result.body)
+    results << json
+  end
+
+  last_history_id = results.last["historyId"].to_i
+  if last_history_id == user.latest_thread_history_id
+    puts "latest status"
+    redirect '/'
+    return
+  end
+  messages = results.inject([]) do |sum,res|
+    sum << res["history"].map{|r| r["messages"]}.flatten.compact
+  end
+
+  batch = Google::APIClient::BatchRequest.new
+  messages.flatten.each do |msg|
+    begin
+      batch.add(api_method: gmail_api.users.messages.get,
+                parameters: { 'id' => msg["id"], 'userId' => 'me'},
+                authorization: user_credentials)
+    rescue => e
+      puts e
+      byebug
+    end
+  end
+  result = api_client.execute(batch, authorization: user_credentials)
+
+  boundary = result.headers["content-type"].split(/boundary=/).last
+  result.body.split(boundary).each do |could_be_msg|
+    if could_be_msg.match(/{.+}/m)
+      json_body = could_be_msg.match(/{.+}/m)[0]
+      msg = JSON.parse(json_body)
+      msg_record = user.messages.find_or_initialize_by(mail_id: msg["id"])
+      msg_record.update_with_msg!(msg)
+    end
+  end
+
+  user.update_attributes!(latest_thread_history_id: last_history_id)
+  redirect '/'
+end
+
+post '/ignore' do
+  msg = Message.find params[:id]
+  if params[:reverse]
+    msgs_from_same_email = Message.where(from_mail: msg.from_mail)
+    msgs_from_same_email.update_all(ignored_at: nil)
+  else
+    msg.update_attributes!(ignored_at: Time.now)
+  end
+  redirect '/'
+end
+
+post '/solve' do
+  msg = Message.find params[:id]
+  if msg.solved_at
+    raise "solved msgを再度solveはできません"
+  end
+  same_msgs_in_others = Message.where(message_protocol_id: msg.message_protocol_id)
+  same_msgs_in_others.each do |same_msg|
+    solve_stab_msg = Message.new(
+      solved_at: Time.now,
+      user_id:   msg.user_id,
+      thread_id: same_msg.thread_id,
+      snippet:   "solved by #{msg.user.email} at #{Time.now}",
+      from_mail: msg.user.email,
+      sent_date: Time.now,
+      headers:   "",
+      body:      "solved by #{msg.user.email} at #{Time.now}",
+      mail_id:   "",
+      message_protocol_id: "",
+    )
+    solve_stab_msg.save!
+  end
+  redirect '/'
+end
+
+get '/import' do
+  user = current_user
+  result = api_client.execute(api_method: gmail_api.users.threads.list,
+                              parameters: { 'userId' => 'me', 'q' => 'is:inbox' },
                               authorization: user_credentials)
   unless result.status == 200
     return JSON.parse(result.body).to_json
   end
   response = JSON.parse result.body
-  mail_ids = response["messages"].map do |hash|
-    hash["id"]
-  end
+  user.latest_thread_history_id = response["threads"].first["historyId"]
+  user.last_thread_next_page_token = response["nextPageToken"]
+  user.save!
 
   batch = Google::APIClient::BatchRequest.new
-  mail_ids.each do |id|
-    batch.add(api_method: gmail_api.users.messages.get,
-              parameters: { 'id' => id, 'userId' => 'me'}, #, 'format' => 'raw' },
+  response["threads"].each do |thread|
+    batch.add(api_method: gmail_api.users.threads.get,
+              parameters: { 'id' => thread["id"], 'userId' => 'me'},
               authorization: user_credentials)
-
   end
-  result = api_client.execute(batch)
+  result = api_client.execute(batch, authorization: user_credentials)
+  unless result.status == 200
+    return JSON.parse(result.body).to_json
+  end
   boundary = result.headers["content-type"].split(/boundary=/).last
-  result.body.split(boundary).each do |could_be_msg|
-    if could_be_msg.match(/{.+}/m)
-      json_body = could_be_msg.match(/{.+}/m)[0]
-      original_msg = JSON.parse(json_body)
-      msg = original_msg["payload"]
+  result.body.split(boundary).each do |could_be_thread|
+    if could_be_thread.match(/{.+}/m)
+      json_body = could_be_thread.match(/{.+}/m)[0]
+      thread = JSON.parse(json_body)
       begin
-        while msg["body"]["size"].to_i == 0
-          msg = msg["parts"].first
+        thread["messages"].each do |msg|
+          msg_record = user.messages.find_or_initialize_by(mail_id: msg["id"])
+          msg_record.update_with_msg!(msg)
         end
-        body = Base64.urlsafe_decode64(msg["body"]["data"])
-
-        gmail_msg = Gmail.new(
-          mail_id: original_msg["id"],
-          snippet: original_msg["snippet"],
-          email:   original_msg["payload"]["headers"][0]["value"],
-          headers: original_msg["payload"]["headers"],
-          body:    body
-        )
       rescue => e
         puts e
         byebug
       end
-
-      gmail_msg.save unless Gmail.exists?(mail_id: gmail_msg.mail_id)
     end
   end
-  @msgs = Gmail.all
-  erb :msgs
+  @msgs = Message.select('*, max(sent_date) as sent_date').group(:thread_id).order('sent_date DESC')
+
+  redirect '/'
+end
+
+def stat(thread, person)
+  diffs = []
+  thread.msgs.each do |msg|
+    i = 1
+    msg_i = msgs.index(msg)
+    begin
+      next_in = msgs[msg_i + i]
+      i += 1
+    end while person.group.include?(msgs[msg_i + i].from)
+
+    diffs << (next_in.date - msg.date)
+  end
+
+  response_time_average = diffs.inject(:+) / diffs.count
+  return response_time_average
 end

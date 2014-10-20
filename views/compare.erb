@@ -1,8 +1,8 @@
 <html>
   <body>
-    <% @msgs.each do |msg| %>
+    <% @same_msgs.each do |msg| %>
       <div>
-        <%= msg.body %>
+        <%= msg[2] %>
       </div>
     <% end %>
   </body>

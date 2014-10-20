@@ -1,1 +1,1 @@
-web: bundle exec ruby email.rb -p $PORT
+web: bundle exec rackup config.ru -p $PORT

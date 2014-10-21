@@ -2,15 +2,15 @@ class User < ActiveRecord::Base
   has_many :messages
 
   def update_token!(object)
+    if object.refresh_token
+      self.refresh_token = object.refresh_token
+    end
+
     self.update_attributes(
       :access_token  => object.access_token,
       :expires_in    => object.expires_in,
       :issued_at     => object.issued_at,
     )
-    if object.refresh_token
-      self.refresh_token = object.refresh_token
-      self.save!
-    end
   end
 
   def token_hash

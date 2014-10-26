@@ -3,3 +3,4 @@ client_secrets.json
 database.yml
 *.log
 client_secret*
+.env

@@ -1,6 +1,7 @@
 source 'https://rubygems.org'
 ruby "2.1.3"
 
+gem 'dotenv'
 gem 'activerecord'
 gem 'mysql2'
 gem 'google-api-client', '>= 0.6'

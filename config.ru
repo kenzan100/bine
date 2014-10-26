@@ -3,6 +3,7 @@ require 'bundler'
 
 Bundler.require
 
+Dotenv.load
 require 'active_record'
 require 'google/api_client'
 require 'google/api_client/client_secrets'

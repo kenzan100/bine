@@ -15,6 +15,13 @@
       <div class="row">
         <div class="col-md-4">
           logged in as <%= @current_user.email %>
+          <% if @current_user.latest_thread_history_id %>
+            <br />
+            次のメール同期まで <%= "約#{((@time_til_next_sync - @time)/60).round}分" %>
+            <a href="/update" class="btn btn-default">
+              今すぐ同期する
+            </a>
+          <% end %>
           <ul class="nav nav-pills nav-stacked">
             <% new_arrivals = @msgs_arr.select{|h| h[:assigned_to].nil?} %>
             <% unless new_arrivals.empty? %>
@@ -55,6 +62,11 @@
               <% tab_id = i == 0 ? "dangers" : "normals" %>
               <% tab_active = i == 0 ? "active" : "" %>
               <div class="tab-pane <%= tab_active %>" id=<%= tab_id %>>
+                <% unless @current_user.messages.exists? %>
+                  <a href="/import" class="btn btn-default">
+                    Gmailの受信トレイをインポート(メール件数によって、10秒〜1分かかります)
+                  </a>
+                <% end %>
                 <% msgs.sort_by{|h| h[:msgs].last.sent_date}.reverse.each do |msg_hash| %>
                   <% if @comparing_user.nil? || @comparing_user == msg_hash[:assigned_to] %>
                     <% if @only_new == false || msg_hash[:assigned_to].nil? %>
@@ -68,7 +80,7 @@
                               <%= msg.subject %>
                             </a>
                             <span style="float: right;">
-                              <%= msg_hash[:msgs].last.sent_date %>
+                              <%= msg_hash[:msgs].last.sent_date.localtime("+09:00").strftime("%c") %>
                             </span>
                           </div>
                         </div>
@@ -117,7 +129,7 @@
                               <input value="Solve" type="submit" class="btn btn-default" />
                             </form>
 
-                            <form method="post" action="/ignore?id=<%=msg.id%>">
+                            <form method="post" action="/ignore?id=<%=msg.id%>" style="float:right;">
                               <input value="Ignore" type="submit" class="btn btn-default" />
                             </form>
                           </div>

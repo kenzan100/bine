@@ -17,6 +17,7 @@ class Message < ActiveRecord::Base
   end
 
   def update_with_msg!(obj)
+    self.mail_id   = obj["id"]
     self.snippet   = obj["snippet"]
     self.thread_id = obj["threadId"]
     self.sent_date = Time.parse(obj["payload"]["headers"].detect{|header| header["name"] == "Date" }["value"])
@@ -33,12 +34,12 @@ class Message < ActiveRecord::Base
     }["value"].match(/[^<>]+@[^<>]+/i)[0]
     self.message_protocol_id = message_protocol_id
 
-    msg_payload = obj["payload"]
-    while msg_payload["body"]["size"].to_i == 0
-      msg_payload = msg_payload["parts"].first
-    end
-    msg_body = Base64.urlsafe_decode64 msg_payload["body"]["data"]
-    self.body = msg_body
+    # msg_payload = obj["payload"]
+    # while msg_payload["body"]["size"].to_i == 0
+    #   msg_payload = msg_payload["parts"].first
+    # end
+    # msg_body = Base64.urlsafe_decode64 msg_payload["body"]["data"]
+    # self.body = msg_body
 
     begin
       self.labels = []

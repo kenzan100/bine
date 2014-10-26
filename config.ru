@@ -1,2 +1,16 @@
+require 'rubygems'
+require 'bundler'
+
+Bundler.require
+
+require 'active_record'
+require 'google/api_client'
+require 'google/api_client/client_secrets'
+require 'google/api_client/auth/file_storage'
+require 'sinatra/reloader' if development?
+require 'logger'
+
+require_relative 'models/init'
 require './email.rb'
-run BineApp
+
+run Sinatra::Application

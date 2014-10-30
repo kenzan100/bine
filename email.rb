@@ -205,6 +205,10 @@ get '/auto_update' do
       auth = api_client.authorization.dup
       auth.redirect_uri = to('/oauth2callback')
       auth.update_token!(user.token_hash)
+      if auth.refresh_token && auth.expired?
+        auth.fetch_access_token!
+        user.update_token!(auth)
+      end
       auth
     )
     messages_arr, last_history_id = fetch_latest_msgs(user)
@@ -361,7 +365,12 @@ def get_and_save_msgs(messages, user)
       json_body = could_be_msg.match(/{.+}/m)[0]
       msg = JSON.parse(json_body)
       msg_record = user.messages.find_or_initialize_by(mail_id: msg["id"])
-      msg_record.update_with_msg!(msg)
+      begin
+        msg_record.update_with_msg!(msg)
+      rescue => e
+        puts e
+        puts msg.to_json
+      end
     end
   end
 end

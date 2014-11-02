@@ -28,10 +28,8 @@ configure do
   client_secrets = Google::APIClient::ClientSecrets.load
   client.authorization = client_secrets.to_authorization
   client.authorization.scope = ['https://mail.google.com/',
-    'https://www.googleapis.com/auth/gmail.modify',
-    'https://www.googleapis.com/auth/userinfo.email']
-
-
+                                'https://www.googleapis.com/auth/gmail.modify',
+                                'https://www.googleapis.com/auth/userinfo.email']
   gmail = client.discovered_api('gmail', 'v1')
   oauth = client.discovered_api('oauth2', 'v2')
 
@@ -153,6 +151,7 @@ get '/' do
   # [TODO] 全文検索エンジン試す
   # [TODO] Fwd と Reの違いを許容するオプションモード検討する
   # Differ.diff_by_char(mail.subject, another_mail.subject).instance_variable_get(:@raw).last
+
   @thread_hash = {}
   rule_for_match = "message_protocol_id"
   your_msgs = if ignoring_mails != []
@@ -164,6 +163,49 @@ get '/' do
     if same_mails = search_targets.where("#{rule_for_match} = ?", mail.read_attribute(rule_for_match))
       if same_mails != []
         @thread_hash[mail.thread_id] = same_mails.pluck(:user_id) + [user.id]
+      end
+    end
+  end
+
+  rest_mails_replied_by_you = search_targets.where(from_mail: user.email)
+  .where("message_protocol_id NOT IN (?)", user.messages.pluck(:message_protocol_id))
+  if rest_mails_replied_by_you != []
+    batch = Google::APIClient::BatchRequest.new
+    rest_mails_replied_by_you.each do |mail_replied_by_you|
+      batch.add(api_method: gmail_api.users.threads.list,
+                parameters: { 'userId' => 'me',
+                  'q'      => "rfc822msgid:#{mail_replied_by_you.message_protocol_id}"},
+      authorization: user_credentials)
+    end
+    result = api_client.execute(batch, authorization: user_credentials)
+    batch = Google::APIClient::BatchRequest.new
+    GmailApiCaller.batch_res_split(result).each do |res|
+      if res.match(/{.+}/m)
+        json_body = res.match(/{.+}/m)[0]
+        res = JSON.parse(json_body)
+        if res["threads"]
+          thread_id = res["threads"][0]["id"]
+          batch.add(api_method: gmail_api.users.threads.get,
+                    parameters: { 'id' => thread_id, 'userId' => 'me'},
+                    authorization: user_credentials)
+        end
+      end
+    end
+    unless batch.calls == []
+      result = api_client.execute(batch, authorization: user_credentials)
+      GmailApiCaller.save_thread_get_batch_res(result, user)
+
+      your_msgs = if ignoring_mails != []
+                    user.messages.where("from_mail NOT IN (?)", ignoring_mails)
+                  else
+                    user.messages
+                  end
+      your_msgs.each do |mail|
+        if same_mails = search_targets.where("#{rule_for_match} = ?", mail.read_attribute(rule_for_match))
+          if same_mails != []
+            @thread_hash[mail.thread_id] = same_mails.pluck(:user_id) + [user.id]
+          end
+        end
       end
     end
   end
@@ -295,21 +337,7 @@ get '/import' do
   unless result.status == 200
     return JSON.parse(result.body).to_json
   end
-  boundary = result.headers["content-type"].split(/boundary=/).last
-  result.body.split(boundary).each do |could_be_thread|
-    if could_be_thread.match(/{.+}/m)
-      json_body = could_be_thread.match(/{.+}/m)[0]
-      thread = JSON.parse(json_body)
-      begin
-        thread["messages"].each do |msg|
-          msg_record = user.messages.find_or_initialize_by(mail_id: msg["id"])
-          msg_record.update_with_msg!(msg)
-        end
-      rescue => e
-        puts e
-      end
-    end
-  end
+  GmailApiCaller.save_thread_get_batch_res(result, user)
   user.latest_thread_history_id = thread_list_response["threads"].first["historyId"]
   user.last_thread_next_page_token = thread_list_response["nextPageToken"]
   user.save!

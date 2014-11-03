@@ -1,0 +1,131 @@
+<html>
+  <head>
+    <!-- Latest compiled and minified CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css">
+
+    <!-- Latest compiled and minified JavaScript -->
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery/2.1.1/jquery.min.js"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.2.0/js/bootstrap.min.js"></script>
+  </head>
+  <body>
+    <div class="container">
+      <div class="row">
+        <div class="col-md-4">
+          logged in as <%= @current_user.email %>
+          <%= @rest_mails_replied_by_you.count %>
+          <% if @current_user.latest_thread_history_id %>
+            <br />
+            次のメール同期まで <%= "約#{((@time_til_next_sync - @time)/60).round}分" %>
+            <a href="/update" class="btn btn-default">
+              今すぐ同期する
+            </a>
+          <% end %>
+          <ul class="nav nav-pills nav-stacked">
+            <% @inboxes.keys.each do |inbox_label| %>
+              <% active_inbox_class = @whose_inbox == inbox_label ? "active" : "" %>
+              <li class="<%= active_inbox_class %>">
+                <a href="/?q=<%= inbox_label %>">
+                  <%= inbox_label %>
+                  <% if @inboxes[inbox_label][:ongoings].length > 0 %>
+                    <span class="badge"><%= @inboxes[inbox_label][:ongoings].length %></span>
+                  <% end %>
+                </a>
+              </li>
+            <% end %>
+            <li>
+              <a href="/ignoring">
+                Ignoring
+              </a>
+            </li>
+          </ul>
+        </div>
+
+        <div class="col-md-8">
+          <ul class="nav nav-tabs" role="tablist">
+            <li class="active"><a href="#ongoings" role="tab" data-toggle="tab">要対応</a></li>
+            <li><a href="#resolved" role="tab" data-toggle="tab">対応済み</a></li>
+          </ul>
+
+          <!-- Tab panes -->
+          <div class="tab-content">
+            <% @inboxes[@whose_inbox].each do |tab_kind, threads| %>
+              <% tab_active = tab_kind == :ongoings ? "active" : "" %>
+              <% panel_class = tab_kind == :ongoings ? "panel-danger" : "panel-default" %>
+              <div class="tab-pane <%= tab_active %>" id="<%= tab_kind.to_s %>">
+                <% unless @current_user.messages.exists? %>
+                  <a href="/import" class="btn btn-default">
+                    Gmailの受信トレイをインポート(メール件数によって、10秒〜1分かかります)
+                  </a>
+                <% end %>
+                <% threads.each do |thread| %>
+                  <div class="panel <%= panel_class %>">
+                    <div class="panel-heading">
+                      <div class="panel-title">
+                        <a href="https://mail.google.com/mail/u/0/#inbox/<%= thread[:info][:id] %>" target="_blank">
+                          <%= thread[:msgs].first.subject %>
+                        </a>
+                        <span style="float: right;">
+                          <%= thread[:msgs].last.sent_date.localtime("+09:00").strftime("%c") %>
+                        </span>
+                      </div>
+                    </div>
+                    <div class="panel-body">
+                      <% thread[:msgs].each do |msg| %>
+                        <%= msg.snippet %>
+                        <p class="text-muted" style="float: right;"><%= msg.from_mail %></p>
+                        <hr>
+                      <% end %>
+
+                      <div class="well well-sm">
+                        <h4>
+                          <span class="label label-primary">Assigned</span>
+                          <%= thread[:info][:assigned_to] %>
+                        </h4>
+
+                        <h5>
+                          <span class="label label-default">visible to</span>
+                          <%= thread[:info][:shared_user_ids] %>
+                        </h5>
+                      </div>
+
+                      <% if panel_class == "panel-danger" %>
+                        <p class="text-danger">
+                          <% if @only_new == true %>
+                            返信した人に自動でアサインされます。Ignoreを押すと、今後同じ送信者からのメールはIgnoringに届きます。
+                          <% else %>
+                            最後の返信が外部の人からです。ReplyかSolveボタンを押してください。
+                          <% end %>
+                        </p>
+                      <% end %>
+
+                      <div style="float:left; width: 100%;">
+                        <style>
+                          form { display: inline-block; }
+                        </style>
+
+                        <a href="https://mail.google.com/mail/#inbox/<%= thread[:info][:id] %>" target="_blank" class="btn btn-default">
+                          Reply (go to inbox)
+                        </a>
+
+                        <form method="post" action="/solve?id=<%=thread[:msgs].last.id%>">
+                          <input value="Solve" type="submit" class="btn btn-default" />
+                        </form>
+
+                        <form method="post" action="/ignore?id=<%=thread[:msgs].first.id%>" style="float:right;">
+                          <input value="Ignore" type="submit" class="btn btn-default" />
+                        </form>
+                      </div>
+
+                    </div>
+                    <div class="panel-footer">
+                    </div>
+                  </div>
+                <% end %>
+              </div>
+            <% end %>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

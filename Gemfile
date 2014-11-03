@@ -17,3 +17,9 @@ gem 'diffy'
 gem 'differ'
 gem 'sanitize'
 gem 'sinatra-activerecord'
+
+group :development do
+  gem 'binding_of_caller'
+  gem 'better_errors'
+  gem 'rack-mini-profiler'
+end

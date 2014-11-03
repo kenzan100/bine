@@ -3,17 +3,17 @@ class Message < ActiveRecord::Base
   has_many :labels, through: :message_has_labels
   belongs_to :user
 
-  def self.who_replied(msgs)
+  def self.who_replied(msgs, user_emails)
     index = 0
     begin
-     replied_by_who = msgs.order('sent_date DESC').offset(index).limit(1).first
+     replied_by_who = msgs.sort_by{|msg| msg.sent_date}.reverse[index]
      if replied_by_who.nil?
        return nil
      end
      replied_by_who_mail = replied_by_who.from_mail
      index += 1
-    end while !User.exists?(email: replied_by_who_mail)
-    User.find_by(email: replied_by_who_mail)
+    end while !user_emails.include?(replied_by_who_mail)
+    return replied_by_who_mail
   end
 
   def update_with_msg!(obj)

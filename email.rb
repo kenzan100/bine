@@ -4,6 +4,7 @@ set :session_secret, ENV['SESSION_SECRET']
 ActiveRecord::Base.configurations = YAML.load_file('database.yml')
 ActiveRecord::Base.establish_connection(ENV['RACK_ENV'].to_sym)
 use ActiveRecord::ConnectionAdapters::ConnectionManagement
+use Rack::MiniProfiler if development?
 
 def api_client; settings.api_client end
 def gmail_api; settings.gmail end
@@ -21,6 +22,11 @@ def user_credentials
     auth.update_token!(token_hash)
     auth
   )
+end
+
+configure :development do
+  use BetterErrors::Middleware
+  BetterErrors.application_root = __dir__
 end
 
 configure do
@@ -88,148 +94,73 @@ get '/oauth2callback' do
   end
 end
 
-# get '/compare' do
-#   user_info = api_client.execute(api_method: oauth2_api.userinfo.get,
-#                                  parameters: { 'fields' => 'email' },
-#                                  authorization: user_credentials)
-#   user_id = JSON.parse(user_info.body)["email"]
-#
-#   DIFF_THRESH = 0.8
-#   LABEL_NAME  = '[BBmail]/shared'
-#
-#   @same_msgs = []
-#   Gmail.where(email: user_id).each do |mail|
-#     Gmail.where("email != ?", user_id).each do |another_mail|
-#       unchanged = Diffy::Diff.new(mail.body, another_mail.body, allow_empty_diff: false)
-#                              .each_chunk
-#                              .reject{|part| part.match(/^(\+|-)/)}
-#                              .first
-#       if unchanged && (unchanged.length > (mail.body.length * DIFF_THRESH))
-#         @same_msgs << [mail.id, another_mail.id, unchanged]
-#       end
-#     end
-#   end
-#
-#   api_client.execute(api_method:  gmail_api.users.labels.create,
-#                      parameters:  {'userId' => 'me'},
-#                      body_object: {'messageListVisibility' => 'hide',
-#                                    'labelListVisibility'   => 'labelShow',
-#                                    'name' => LABEL_NAME},
-#                      authorization: user_credentials)
-#   #[FIXME] only call when label_name not exist
-#
-#   batch = Google::APIClient::BatchRequest.new
-#   @same_msgs.each do |msg_arr|
-#     dup_msg_id = Gmail.find(msg_arr.first).mail_id
-#     batch.add(api_method: gmail_api.users.messages.modify,
-#               parameters:  { 'id' => dup_msg_id,
-#                              'userId' => 'me'},
-#               body_object: {'removeLabelIds' => [],
-#                             'addLabelIds'    => ['INBOX']},
-#               authorization: user_credentials)
-#   end
-#   api_client.execute(batch, authorization: user_credentials)
-#   # unless result.status == 200
-#   #   puts "unsuccessful api call when trying to modify labels"
-#   #   byebug
-#   # end
-#
-#   erb :compare
-# end
 
 get '/' do
-  user = current_user
-
+  user = User.find(3)
   @current_user = user
-  ignoring_mails = Message.where("ignored_at IS NOT NULL").pluck(:from_mail).uniq
-  search_targets = Message.where("user_id != ?", user.id)
-
-  # [TODO] メッセージ全体のインポートの保存期間を設定して、
-  # 現在共有中の人を全員updateし終わっても同じ duplicateが見つからなかったら、それ以外の
-  # メールは削除する
-
-  # [TODO] 全文検索エンジン試す
-  # [TODO] Fwd と Reの違いを許容するオプションモード検討する
-  # Differ.diff_by_char(mail.subject, another_mail.subject).instance_variable_get(:@raw).last
-
-  @thread_hash = {}
-  rule_for_match = "message_protocol_id"
-  your_msgs = if ignoring_mails != []
-                user.messages.where("from_mail NOT IN (?)", ignoring_mails)
-              else
-                user.messages
-              end
-  your_msgs.each do |mail|
-    if same_mails = search_targets.where("#{rule_for_match} = ?", mail.read_attribute(rule_for_match))
-      if same_mails != []
-        @thread_hash[mail.thread_id] = same_mails.pluck(:user_id) + [user.id]
+  @whose_inbox = params[:q] || "new"
+  ignoring_mails = Message.where("ignored_at IS NOT NULL").pluck(:from_mail).uniq.join("','").insert(0,"'") << "'"
+  target_user_ids = User.where("id != ?", user.id).pluck(:id).join(",")
+  @same_msgs = Message.find_by_sql(<<-SQL.gsub(/\s+/, ' ')
+                 SELECT messages.message_protocol_id, sub.message_protocol_id,
+                        messages.user_id, sub.user_id,
+                        sub.thread_id, sub.id, sub.snippet, sub.sent_date, sub.from_mail, sub.subject,
+                        GROUP_CONCAT(messages.user_id) AS user_ids
+                 FROM messages
+                 INNER JOIN messages AS sub
+                 ON(messages.message_protocol_id = sub.message_protocol_id
+                    AND messages.user_id != sub.user_id
+                    AND sub.user_id = #{user.id}
+                    AND messages.user_id IN (#{target_user_ids})
+                    AND messages.from_mail NOT IN (#{ignoring_mails}))
+                 GROUP BY messages.message_protocol_id
+               SQL
+               )
+  @rest_mails_replied_by_you = Message.where(from_mail: user.email)
+                                      .where("message_protocol_id NOT IN (?)", user.messages.pluck(:message_protocol_id))
+  @inboxes = {}
+  user_emails = User.pluck(:email)
+  @inboxes["new"] = {}
+  @inboxes["new"][:ongoings] = []
+  user_emails.each do |email|
+    @inboxes[email] = {}
+    @inboxes[email][:ongoings] = []
+    @inboxes[email][:resolved] = []
+  end
+  @same_msgs.sort_by{|msg| msg.sent_date}.reverse
+            .group_by{|msg| msg.thread_id}.each do |thread_id, msgs|
+    msgs = msgs.reverse
+    thread = {}
+    thread[:info] = {}
+    thread[:info][:id] = thread_id
+    thread[:info][:shared_user_ids] = msgs.map{|msg| msg.user_ids.split(",").map(&:to_i)}.flatten.uniq
+    thread[:msgs] = msgs
+    if replied_user_email = Message.who_replied(msgs, user_emails)
+      thread[:info][:assigned_to] = replied_user_email
+    end
+    if replied_user_email
+      if replied_user_email == msgs.last.from_mail
+        @inboxes[replied_user_email][:resolved] << thread
+      else
+        @inboxes[replied_user_email][:ongoings] << thread
       end
+    else
+      @inboxes["new"][:ongoings] << thread
     end
   end
-
-  rest_mails_replied_by_you = search_targets.where(from_mail: user.email)
-  .where("message_protocol_id NOT IN (?)", user.messages.pluck(:message_protocol_id))
-  if rest_mails_replied_by_you != []
-    batch = Google::APIClient::BatchRequest.new
-    rest_mails_replied_by_you.each do |mail_replied_by_you|
-      batch.add(api_method: gmail_api.users.threads.list,
-                parameters: { 'userId' => 'me',
-                  'q'      => "rfc822msgid:#{mail_replied_by_you.message_protocol_id}"},
-      authorization: user_credentials)
-    end
-    result = api_client.execute(batch, authorization: user_credentials)
-    batch = Google::APIClient::BatchRequest.new
-    GmailApiCaller.batch_res_split(result).each do |res|
-      if res.match(/{.+}/m)
-        json_body = res.match(/{.+}/m)[0]
-        res = JSON.parse(json_body)
-        if res["threads"]
-          thread_id = res["threads"][0]["id"]
-          batch.add(api_method: gmail_api.users.threads.get,
-                    parameters: { 'id' => thread_id, 'userId' => 'me'},
-                    authorization: user_credentials)
-        end
-      end
-    end
-    unless batch.calls == []
-      result = api_client.execute(batch, authorization: user_credentials)
-      GmailApiCaller.save_thread_get_batch_res(result, user)
-
-      your_msgs = if ignoring_mails != []
-                    user.messages.where("from_mail NOT IN (?)", ignoring_mails)
-                  else
-                    user.messages
-                  end
-      your_msgs.each do |mail|
-        if same_mails = search_targets.where("#{rule_for_match} = ?", mail.read_attribute(rule_for_match))
-          if same_mails != []
-            @thread_hash[mail.thread_id] = same_mails.pluck(:user_id) + [user.id]
-          end
-        end
-      end
-    end
-  end
-
-  @ongoing_threads_hash = {}
-  @msgs_arr = []
-  @thread_hash.each do |thread_id, shared_with_user_ids|
-    msg_hash = {}
-    msg_hash[:msgs]                = Message.where(thread_id: thread_id).order('sent_date')
-    msg_hash[:assigned_to]         = Message.who_replied(msg_hash[:msgs])
-    msg_hash[:shared_with_user_ids] = shared_with_user_ids
-    if msg_hash[:assigned_to] && msg_hash[:msgs].last.from_mail != msg_hash[:assigned_to].email
-      @ongoing_threads_hash[msg_hash[:assigned_to].id] = @ongoing_threads_hash.fetch(msg_hash[:assigned_to].id, 0) + 1
-    end
-    @msgs_arr << msg_hash
-  end
-
-  @comparing_user = User.find_by(id: params[:id])
-  @only_new = params[:id] ? false : true
 
   @time = Time.now
   @time_til_next_sync = Time.mktime(@time.year,@time.month,@time.day,@time.hour)+3600
-  erb :shared_msgs
+  erb :news
 end
+
+# [TODO] メッセージ全体のインポートの保存期間を設定して、
+# 現在共有中の人を全員updateし終わっても同じ duplicateが見つからなかったら、それ以外の
+# メールは削除する
+
+# [TODO] 全文検索エンジン試す
+# [TODO] Fwd と Reの違いを許容するオプションモード検討する
+# Differ.diff_by_char(mail.subject, another_mail.subject).instance_variable_get(:@raw).last
 
 get '/ignoring' do
   ignoring_mails = Message.where("ignored_at IS NOT NULL").pluck(:from_mail).uniq
@@ -261,6 +192,35 @@ get '/auto_update' do
       messages = messages_arr.flatten
       get_and_save_msgs(messages,user)
       user.update_attributes!(latest_thread_history_id: last_history_id)
+    end
+
+    rest_mails_replied_by_you = Message.where(from_mail: user.email)
+                                       .where("message_protocol_id NOT IN (?)", user.messages.pluck(:message_protocol_id))
+
+    batch = Google::APIClient::BatchRequest.new
+    rest_mails_replied_by_you.each do |mail_replied_by_you|
+      batch.add(api_method: gmail_api.users.threads.list,
+                parameters: { 'userId' => 'me',
+                              'q'      => "rfc822msgid:#{mail_replied_by_you.message_protocol_id}"},
+                authorization: user_credentials)
+    end
+    result = api_client.execute(batch, authorization: user_credentials)
+    batch = Google::APIClient::BatchRequest.new
+    GmailApiCaller.batch_res_split(result).each do |res|
+      if res.match(/{.+}/m)
+        json_body = res.match(/{.+}/m)[0]
+        res = JSON.parse(json_body)
+        if res["threads"]
+          thread_id = res["threads"][0]["id"]
+          batch.add(api_method: gmail_api.users.threads.get,
+                    parameters: { 'id' => thread_id, 'userId' => 'me'},
+                    authorization: user_credentials)
+        end
+      end
+    end
+    unless batch.calls == []
+      result = api_client.execute(batch, authorization: user_credentials)
+      GmailApiCaller.save_thread_get_batch_res(result, user)
     end
   end
   "update finished\n"
@@ -419,3 +379,53 @@ def stat(thread, person)
   response_time_average = diffs.inject(:+) / diffs.count
   return response_time_average
 end
+
+# get '/compare' do
+#   user_info = api_client.execute(api_method: oauth2_api.userinfo.get,
+#                                  parameters: { 'fields' => 'email' },
+#                                  authorization: user_credentials)
+#   user_id = JSON.parse(user_info.body)["email"]
+#
+#   DIFF_THRESH = 0.8
+#   LABEL_NAME  = '[BBmail]/shared'
+#
+#   @same_msgs = []
+#   Gmail.where(email: user_id).each do |mail|
+#     Gmail.where("email != ?", user_id).each do |another_mail|
+#       unchanged = Diffy::Diff.new(mail.body, another_mail.body, allow_empty_diff: false)
+#                              .each_chunk
+#                              .reject{|part| part.match(/^(\+|-)/)}
+#                              .first
+#       if unchanged && (unchanged.length > (mail.body.length * DIFF_THRESH))
+#         @same_msgs << [mail.id, another_mail.id, unchanged]
+#       end
+#     end
+#   end
+#
+#   api_client.execute(api_method:  gmail_api.users.labels.create,
+#                      parameters:  {'userId' => 'me'},
+#                      body_object: {'messageListVisibility' => 'hide',
+#                                    'labelListVisibility'   => 'labelShow',
+#                                    'name' => LABEL_NAME},
+#                      authorization: user_credentials)
+#   #[FIXME] only call when label_name not exist
+#
+#   batch = Google::APIClient::BatchRequest.new
+#   @same_msgs.each do |msg_arr|
+#     dup_msg_id = Gmail.find(msg_arr.first).mail_id
+#     batch.add(api_method: gmail_api.users.messages.modify,
+#               parameters:  { 'id' => dup_msg_id,
+#                              'userId' => 'me'},
+#               body_object: {'removeLabelIds' => [],
+#                             'addLabelIds'    => ['INBOX']},
+#               authorization: user_credentials)
+#   end
+#   api_client.execute(batch, authorization: user_credentials)
+#   # unless result.status == 200
+#   #   puts "unsuccessful api call when trying to modify labels"
+#   #   byebug
+#   # end
+#
+#   erb :compare
+# end
+

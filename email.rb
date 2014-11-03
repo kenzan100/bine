@@ -96,7 +96,7 @@ end
 
 
 get '/' do
-  user = User.find(3)
+  user = current_user
   @current_user = user
   @whose_inbox = params[:q] || "new"
   ignoring_mails = Message.where("ignored_at IS NOT NULL").pluck(:from_mail).uniq.join("','").insert(0,"'") << "'"

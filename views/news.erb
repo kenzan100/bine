@@ -12,7 +12,6 @@
       <div class="row">
         <div class="col-md-4">
           logged in as <%= @current_user.email %>
-          <%= @rest_mails_replied_by_you.count %>
           <% if @current_user.latest_thread_history_id %>
             <br />
             次のメール同期まで <%= "約#{((@time_til_next_sync - @time)/60).round}分" %>

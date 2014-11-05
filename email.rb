@@ -191,6 +191,7 @@ get '/auto_update' do
     else
       messages = messages_arr.flatten
       get_and_save_msgs(messages,user)
+      user.reload
       user.update_attributes!(latest_thread_history_id: last_history_id)
     end
 
@@ -204,23 +205,25 @@ get '/auto_update' do
                               'q'      => "rfc822msgid:#{mail_replied_by_you.message_protocol_id}"},
                 authorization: user_credentials)
     end
-    result = api_client.execute(batch, authorization: user_credentials)
-    batch = Google::APIClient::BatchRequest.new
-    GmailApiCaller.batch_res_split(result).each do |res|
-      if res.match(/{.+}/m)
-        json_body = res.match(/{.+}/m)[0]
-        res = JSON.parse(json_body)
-        if res["threads"]
-          thread_id = res["threads"][0]["id"]
-          batch.add(api_method: gmail_api.users.threads.get,
-                    parameters: { 'id' => thread_id, 'userId' => 'me'},
-                    authorization: user_credentials)
-        end
-      end
-    end
     unless batch.calls == []
       result = api_client.execute(batch, authorization: user_credentials)
-      GmailApiCaller.save_thread_get_batch_res(result, user)
+      batch = Google::APIClient::BatchRequest.new
+      GmailApiCaller.batch_res_split(result).each do |res|
+        if res.match(/{.+}/m)
+          json_body = res.match(/{.+}/m)[0]
+          res = JSON.parse(json_body)
+          if res["threads"]
+            thread_id = res["threads"][0]["id"]
+            batch.add(api_method: gmail_api.users.threads.get,
+                      parameters: { 'id' => thread_id, 'userId' => 'me'},
+                      authorization: user_credentials)
+          end
+        end
+      end
+      unless batch.calls == []
+        result = api_client.execute(batch, authorization: user_credentials)
+        GmailApiCaller.save_thread_get_batch_res(result, user)
+      end
     end
   end
   "update finished\n"
@@ -328,7 +331,11 @@ def fetch_latest_msgs(user)
                nil
              else
                results.inject([]) do |sum,res|
-                 sum << res["history"].map{|r| r["messages"]}.flatten.compact
+                 if res["history"]
+                   sum << res["history"].map{|r| r["messages"]}.flatten.compact
+                 else
+                   sum
+                 end
                end
              end
   [messages, last_history_id]

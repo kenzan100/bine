@@ -15,7 +15,7 @@
           <% if @current_user.latest_thread_history_id %>
             <br />
             次のメール同期まで <%= "約#{((@time_til_next_sync - @time)/60).round}分" %>
-            <a href="/update" class="btn btn-default">
+            <a href="/auto_update?to_top=true" class="btn btn-default">
               今すぐ同期する
             </a>
           <% end %>
@@ -23,7 +23,7 @@
             <% @inboxes.keys.each do |inbox_label| %>
               <% active_inbox_class = @whose_inbox == inbox_label ? "active" : "" %>
               <li class="<%= active_inbox_class %>">
-                <a href="/?q=<%= inbox_label %>">
+                <a href="/?q=<%= inbox_label %>&user_id=<%= @user_id %>">
                   <%= inbox_label %>
                   <% if @inboxes[inbox_label][:ongoings].length > 0 %>
                     <span class="badge"><%= @inboxes[inbox_label][:ongoings].length %></span>
@@ -83,7 +83,7 @@
 
                         <h5>
                           <span class="label label-default">visible to</span>
-                          <%= thread[:info][:shared_user_ids] %>
+                          <%= thread[:info][:shared_user_emails].join(" ") %>
                         </h5>
                       </div>
 

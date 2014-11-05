@@ -101,23 +101,25 @@ get '/' do
   @whose_inbox = params[:q] || "new"
   ignoring_mails = Message.where("ignored_at IS NOT NULL").pluck(:from_mail).uniq.join("','").insert(0,"'") << "'"
   target_user_ids = User.where("id != ?", user.id).pluck(:id).join(",")
-  @same_msgs = Message.find_by_sql(<<-SQL.gsub(/\s+/, ' ')
-                 SELECT messages.message_protocol_id, sub.message_protocol_id,
-                        messages.user_id, sub.user_id,
-                        sub.thread_id, sub.id, sub.snippet, sub.sent_date, sub.from_mail, sub.subject,
-                        GROUP_CONCAT(messages.user_id) AS user_ids
-                 FROM messages
-                 INNER JOIN messages AS sub
-                 ON(messages.message_protocol_id = sub.message_protocol_id
-                    AND messages.user_id != sub.user_id
-                    AND sub.user_id = #{user.id}
-                    AND messages.user_id IN (#{target_user_ids})
-                    AND messages.from_mail NOT IN (#{ignoring_mails}))
-                 GROUP BY messages.message_protocol_id
-               SQL
-               )
-  @rest_mails_replied_by_you = Message.where(from_mail: user.email)
-                                      .where("message_protocol_id NOT IN (?)", user.messages.pluck(:message_protocol_id))
+  msgs_with_same_id = Message.find_by_sql(<<-SQL.gsub(/\s+/, ' ')
+                        SELECT messages.message_protocol_id, sub.message_protocol_id,
+                               messages.user_id, sub.user_id,
+                               sub.thread_id, sub.id, sub.snippet, sub.sent_date, sub.from_mail, sub.subject,
+                               GROUP_CONCAT(users.email) AS shared_user_emails
+                        FROM messages
+                        INNER JOIN messages AS sub
+                        ON(messages.message_protocol_id = sub.message_protocol_id
+                           AND messages.user_id != sub.user_id
+                           AND sub.user_id = #{user.id}
+                           AND messages.user_id IN (#{target_user_ids})
+                           AND messages.from_mail NOT IN (#{ignoring_mails}))
+                        INNER JOIN users
+                        ON(messages.user_id = users.id)
+                        GROUP BY messages.message_protocol_id
+                      SQL
+                      )
+  solve_stab_msgs = user.messages.where("solved_at IS NOT NULL")
+  same_msgs = msgs_with_same_id + solve_stab_msgs
   @inboxes = {}
   user_emails = User.pluck(:email)
   @inboxes["new"] = {}
@@ -127,13 +129,15 @@ get '/' do
     @inboxes[email][:ongoings] = []
     @inboxes[email][:resolved] = []
   end
-  @same_msgs.sort_by{|msg| msg.sent_date}.reverse
-            .group_by{|msg| msg.thread_id}.each do |thread_id, msgs|
+  same_msgs.sort_by{|msg| msg.sent_date}.reverse
+           .group_by{|msg| msg.thread_id}.each do |thread_id, msgs|
     msgs = msgs.reverse
     thread = {}
     thread[:info] = {}
     thread[:info][:id] = thread_id
-    thread[:info][:shared_user_ids] = msgs.map{|msg| msg.user_ids.split(",").map(&:to_i)}.flatten.uniq
+    thread[:info][:shared_user_emails] = msgs.map{|msg|
+                                           msg.shared_user_emails.split(",") if msg.respond_to? :shared_user_emails
+                                         }.compact.flatten.uniq << user.email
     thread[:msgs] = msgs
     if replied_user_email = Message.who_replied(msgs, user_emails)
       thread[:info][:assigned_to] = replied_user_email
@@ -163,12 +167,9 @@ end
 # Differ.diff_by_char(mail.subject, another_mail.subject).instance_variable_get(:@raw).last
 
 get '/ignoring' do
-  ignoring_mails = Message.where("ignored_at IS NOT NULL").pluck(:from_mail).uniq
+  @ignoring_mails = Message.where("ignored_at IS NOT NULL").pluck(:from_mail).uniq
   @current_user = current_user
-  @msgs_arr = []
-  ignoring_mails.each do |from_mail|
-    @msgs_arr << Message.where(from_mail: from_mail).group(:subject).order('sent_date ASC')
-  end
+  @ignoring_msgs = Message.where(from_mail: @ignoring_mails).order('sent_date DESC')
   erb :ignorings
 end
 
@@ -226,24 +227,11 @@ get '/auto_update' do
       end
     end
   end
-  "update finished\n"
-end
-
-get '/update' do
-  user = current_user
-  if user.latest_thread_history_id
-    messages_arr, last_history_id = fetch_latest_msgs(user)
-    if messages_arr.nil?
-      puts 'latest status'
-      redirect '/'
-      return
-    else
-      messages = messages_arr.flatten
-      get_and_save_msgs(messages,user)
-      user.update_attributes!(latest_thread_history_id: last_history_id)
-    end
+  if params[:to_top]
+    redirect '/'
+  else
+    "update finished\n"
   end
-  redirect '/'
 end
 
 post '/ignore' do

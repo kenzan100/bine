@@ -7,7 +7,7 @@ class GmailEntity < ActiveRecord::Base
   def self.who_replied(msgs, user_emails)
     index = 0
     begin
-     replied_by_who = msgs.sort_by{|msg| msg.sent_date}.reverse[index]
+     replied_by_who = msgs.map(&:msg_entity).sort_by{|msg| msg.sent_date}.reverse[index]
      if replied_by_who.nil?
        return nil
      end

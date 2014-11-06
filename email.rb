@@ -94,32 +94,11 @@ get '/oauth2callback' do
   end
 end
 
-
 get '/' do
-  user = current_user
+  @user_id = params[:user_id]
+  user = User.find_by_id(params[:user_id]) || current_user
   @current_user = user
   @whose_inbox = params[:q] || "new"
-  ignoring_mails = Message.where("ignored_at IS NOT NULL").pluck(:from_mail).uniq.join("','").insert(0,"'") << "'"
-  target_user_ids = User.where("id != ?", user.id).pluck(:id).join(",")
-  msgs_with_same_id = Message.find_by_sql(<<-SQL.gsub(/\s+/, ' ')
-                        SELECT messages.message_protocol_id, sub.message_protocol_id,
-                               messages.user_id, sub.user_id,
-                               sub.thread_id, sub.id, sub.snippet, sub.sent_date, sub.from_mail, sub.subject,
-                               GROUP_CONCAT(users.email) AS shared_user_emails
-                        FROM messages
-                        INNER JOIN messages AS sub
-                        ON(messages.message_protocol_id = sub.message_protocol_id
-                           AND messages.user_id != sub.user_id
-                           AND sub.user_id = #{user.id}
-                           AND messages.user_id IN (#{target_user_ids})
-                           AND messages.from_mail NOT IN (#{ignoring_mails}))
-                        INNER JOIN users
-                        ON(messages.user_id = users.id)
-                        GROUP BY messages.message_protocol_id
-                      SQL
-                      )
-  solve_stab_msgs = user.messages.where("solved_at IS NOT NULL")
-  same_msgs = msgs_with_same_id + solve_stab_msgs
   @inboxes = {}
   user_emails = User.pluck(:email)
   @inboxes["new"] = {}
@@ -129,21 +108,29 @@ get '/' do
     @inboxes[email][:ongoings] = []
     @inboxes[email][:resolved] = []
   end
-  same_msgs.sort_by{|msg| msg.sent_date}.reverse
-           .group_by{|msg| msg.thread_id}.each do |thread_id, msgs|
-    msgs = msgs.reverse
+
+  ignoring_mails = MsgEntity.where("ignored_at IS NOT NULL").pluck(:from_mail).uniq
+  msgs_without_ignoring = MsgEntity.where("from_mail NOT IN (?)", ignoring_mails)
+  gmail_entities = msgs_without_ignoring.includes(gmail_entities: [:user]).map do |msg|
+    msg.gmail_entities.detect{|g| g.user_id == user.id} || msg.gmail_entities.first
+  end
+
+  gmail_entities.group_by{|g|
+    g.msg_entity.subject && g.msg_entity.subject.gsub(/[\s|　]/,'').gsub(/^(Re:)+/i,'')
+  }.each do |subject, g_entities|
+    msgs = g_entities.sort_by{|g| g.msg_entity.sent_date}
     thread = {}
     thread[:info] = {}
-    thread[:info][:id] = thread_id
-    thread[:info][:shared_user_emails] = msgs.map{|msg|
-                                           msg.shared_user_emails.split(",") if msg.respond_to? :shared_user_emails
-                                         }.compact.flatten.uniq << user.email
+    if your_msg = msgs.detect{|msg| msg.user_id == user.id}
+      thread[:info][:id] = your_msg.thread_id
+    end
+    thread[:info][:shared_user_emails] = msgs.map{|msg| msg.msg_entity.gmail_entities.map{|g| g.user.email}}.flatten.uniq
     thread[:msgs] = msgs
-    if replied_user_email = Message.who_replied(msgs, user_emails)
+    if replied_user_email = GmailEntity.who_replied(msgs, user_emails)
       thread[:info][:assigned_to] = replied_user_email
     end
     if replied_user_email
-      if replied_user_email == msgs.last.from_mail
+      if replied_user_email == msgs.last.msg_entity.from_mail
         @inboxes[replied_user_email][:resolved] << thread
       else
         @inboxes[replied_user_email][:ongoings] << thread

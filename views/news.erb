@@ -42,7 +42,9 @@
         <div class="col-md-8">
           <ul class="nav nav-tabs" role="tablist">
             <li class="active"><a href="#ongoings" role="tab" data-toggle="tab">要対応</a></li>
-            <li><a href="#resolved" role="tab" data-toggle="tab">対応済み</a></li>
+            <% unless @whose_inbox == "new" %>
+              <li><a href="#resolved" role="tab" data-toggle="tab">対応済み</a></li>
+            <% end %>
           </ul>
 
           <!-- Tab panes -->
@@ -60,18 +62,21 @@
                   <div class="panel <%= panel_class %>">
                     <div class="panel-heading">
                       <div class="panel-title">
+                        <% unless thread[:info][:id] %>
+                          <span class="label label-warning">Not in Your Inbox</span>
+                        <% end %>
                         <a href="https://mail.google.com/mail/u/0/#inbox/<%= thread[:info][:id] %>" target="_blank">
-                          <%= thread[:msgs].first.subject %>
+                          <%= thread[:msgs].first.msg_entity.subject %>
                         </a>
                         <span style="float: right;">
-                          <%= thread[:msgs].last.sent_date.localtime("+09:00").strftime("%c") %>
+                          <%= thread[:msgs].last.msg_entity.sent_date.localtime("+09:00").strftime("%c") %>
                         </span>
                       </div>
                     </div>
                     <div class="panel-body">
                       <% thread[:msgs].each do |msg| %>
-                        <%= msg.snippet %>
-                        <p class="text-muted" style="float: right;"><%= msg.from_mail %></p>
+                        <%= msg.msg_entity.snippet %>
+                        <p class="text-muted" style="float: right;"><%= msg.msg_entity.from_mail %></p>
                         <hr>
                       <% end %>
 

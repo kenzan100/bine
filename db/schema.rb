@@ -11,13 +11,22 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema.define(version: 0) do
+ActiveRecord::Schema.define(version: 20141106110125) do
 
   create_table "duplicates", force: true do |t|
     t.string   "dup_mail_id",         null: false
     t.string   "another_dup_mail_id", null: false
     t.datetime "created_at",          null: false
     t.datetime "updated_at",          null: false
+  end
+
+  create_table "gmail_entities", force: true do |t|
+    t.integer  "user_id",    null: false
+    t.string   "thread_id",  null: false
+    t.text     "headers",    null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.string   "mail_id",    null: false
   end
 
   create_table "labels", force: true do |t|
@@ -32,20 +41,16 @@ ActiveRecord::Schema.define(version: 0) do
     t.integer "message_id", null: false
   end
 
-  create_table "messages", force: true do |t|
-    t.integer  "user_id",             null: false
-    t.string   "thread_id",           null: false
+  create_table "msg_entities", force: true do |t|
     t.string   "snippet",             null: false
     t.string   "from_mail",           null: false
     t.datetime "sent_date",           null: false
     t.string   "subject"
-    t.text     "headers",             null: false
-    t.datetime "created_at",          null: false
-    t.datetime "updated_at",          null: false
-    t.string   "mail_id",             null: false
     t.string   "message_protocol_id", null: false
     t.datetime "ignored_at"
     t.datetime "solved_at"
+    t.datetime "created_at",          null: false
+    t.datetime "updated_at",          null: false
   end
 
   create_table "users", force: true do |t|

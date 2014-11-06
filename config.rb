@@ -11,5 +11,7 @@ require 'google/api_client/auth/file_storage'
 require 'sinatra/reloader' if development?
 require 'logger'
 
+require 'better_errors'
+require 'rack-mini-profiler'
 require_relative 'models/init'
 require './email.rb'

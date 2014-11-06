@@ -11,7 +11,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema.define(version: 20141106110125) do
+ActiveRecord::Schema.define(version: 20141106112725) do
 
   create_table "duplicates", force: true do |t|
     t.string   "dup_mail_id",         null: false
@@ -21,12 +21,13 @@ ActiveRecord::Schema.define(version: 20141106110125) do
   end
 
   create_table "gmail_entities", force: true do |t|
-    t.integer  "user_id",    null: false
-    t.string   "thread_id",  null: false
-    t.text     "headers",    null: false
-    t.datetime "created_at", null: false
-    t.datetime "updated_at", null: false
-    t.string   "mail_id",    null: false
+    t.integer  "user_id",       null: false
+    t.string   "thread_id",     null: false
+    t.text     "headers",       null: false
+    t.datetime "created_at",    null: false
+    t.datetime "updated_at",    null: false
+    t.string   "mail_id",       null: false
+    t.integer  "msg_entity_id"
   end
 
   create_table "labels", force: true do |t|

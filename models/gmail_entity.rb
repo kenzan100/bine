@@ -1,7 +1,8 @@
-class Message < ActiveRecord::Base
-  has_many :message_has_labels
+class GmailEntity < ActiveRecord::Base
+  has_many :message_has_labels, foreign_key: :message_id
   has_many :labels, through: :message_has_labels
   belongs_to :user
+  belongs_to :msg_entity
 
   def self.who_replied(msgs, user_emails)
     index = 0

@@ -1,5 +1,5 @@
 class User < ActiveRecord::Base
-  has_many :messages
+  has_many :messages, class_name: "GmailEntity"
 
   def update_token!(object)
     if object.refresh_token

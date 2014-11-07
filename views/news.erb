@@ -111,11 +111,11 @@
                           Reply (go to inbox)
                         </a>
 
-                        <form method="post" action="/solve?id=<%=thread[:msgs].last.id%>">
+                        <form method="post" action="/solve?id=<%=thread[:msgs].last.msg_entity.id%>">
                           <input value="Solve" type="submit" class="btn btn-default" />
                         </form>
 
-                        <form method="post" action="/ignore?id=<%=thread[:msgs].first.id%>" style="float:right;">
+                        <form method="post" action="/ignore?id=<%=thread[:msgs].first.msg_entity.id%>" style="float:right;">
                           <input value="Ignore" type="submit" class="btn btn-default" />
                         </form>
                       </div>

@@ -28,6 +28,7 @@
           <% i = 0 %>
           <% @ignoring_msgs.group_by{|msg| msg.from_mail}.each do |from_mail, msgs| %>
             <% i += 1 %>
+            <% msgs = msgs.sort_by{|msg| msg.sent_date} %>
             <% msg = msgs.first %>
             <div class="panel">
               <div class="panel-heading">
@@ -46,9 +47,7 @@
               <div class="panel-body">
                 <div id="msgs_<%=i%>" class="collapse">
                   <% msgs.each do |msg| %>
-                    <a href="https://mail.google.com/mail/u/0/#inbox/<%= msg.thread_id %>" target="_blank">
-                      <%= msg.snippet %>
-                    </a>
+                    <%= msg.snippet %>
                     <hr>
                   <% end %>
                 </div>

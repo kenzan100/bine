@@ -154,9 +154,9 @@ end
 # Differ.diff_by_char(mail.subject, another_mail.subject).instance_variable_get(:@raw).last
 
 get '/ignoring' do
-  @ignoring_mails = Message.where("ignored_at IS NOT NULL").pluck(:from_mail).uniq
+  @ignoring_mails = MsgEntity.where("ignored_at IS NOT NULL").pluck(:from_mail).uniq
   @current_user = current_user
-  @ignoring_msgs = Message.where(from_mail: @ignoring_mails).order('sent_date DESC')
+  @ignoring_msgs = MsgEntity.where(from_mail: @ignoring_mails).order('sent_date DESC')
   erb :ignorings
 end
 
@@ -222,9 +222,9 @@ get '/auto_update' do
 end
 
 post '/ignore' do
-  msg = Message.find params[:id]
+  msg = MsgEntity.find params[:id]
   if params[:reverse]
-    msgs_from_same_email = Message.where(from_mail: msg.from_mail)
+    msgs_from_same_email = MsgEntity.where(from_mail: msg.from_mail)
     msgs_from_same_email.update_all(ignored_at: nil)
   else
     msg.update_attributes!(ignored_at: Time.now)
@@ -233,25 +233,25 @@ post '/ignore' do
 end
 
 post '/solve' do
-  msg = Message.find params[:id]
+  user = current_user
+  msg = MsgEntity.find params[:id]
   if msg.solved_at
     raise "solved msgを再度solveはできません"
   end
-  same_msgs_in_others = Message.where(message_protocol_id: msg.message_protocol_id)
-  same_msgs_in_others.each do |same_msg|
-    solve_stab_msg = Message.new(
-      solved_at: Time.now,
-      user_id:   msg.user_id,
-      thread_id: same_msg.thread_id,
-      snippet:   "solved by #{msg.user.email} at #{Time.now}",
-      from_mail: msg.user.email,
-      sent_date: Time.now,
-      headers:   "",
-      mail_id:   "",
-      message_protocol_id: "",
-    )
-    solve_stab_msg.save!
-  end
+  solve_stab_msg = MsgEntity.create!(
+    snippet:   "solved by #{user.email} at #{Time.now}",
+    from_mail: user.email,
+    sent_date: Time.now,
+    subject:   msg.subject,
+    message_protocol_id: "",
+    solved_at: Time.now
+  )
+  solve_stab_msg.gmail_entities.create!(
+    user_id:   user.id,
+    thread_id: "",
+    headers:   "",
+    mail_id:   ""
+  )
   redirect '/'
 end
 

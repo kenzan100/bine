@@ -110,12 +110,16 @@ get '/' do
   end
 
   ignoring_mails = MsgEntity.where("ignored_at IS NOT NULL").pluck(:from_mail).uniq
-  msgs_without_ignoring = MsgEntity.where("from_mail NOT IN (?)", ignoring_mails)
+  msgs_without_ignoring = if ignoring_mails.empty?
+                            MsgEntity
+                          else
+                            MsgEntity.where("from_mail NOT IN (?)", ignoring_mails)
+                          end
   gmail_entities = msgs_without_ignoring.includes(gmail_entities: [:user]).map do |msg|
     msg.gmail_entities.detect{|g| g.user_id == user.id} || msg.gmail_entities.first
   end
 
-  gmail_entities.group_by{|g|
+  gmail_entities.sort_by{|g| g.msg_entity.sent_date }.reverse.group_by{|g|
     g.msg_entity.subject && g.msg_entity.subject.gsub(/[\s|　]/,'').gsub(/^(Re:)+/i,'')
   }.each do |subject, g_entities|
     msgs = g_entities.sort_by{|g| g.msg_entity.sent_date}

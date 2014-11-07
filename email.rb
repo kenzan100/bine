@@ -183,8 +183,8 @@ get '/auto_update' do
       user.update_attributes!(latest_thread_history_id: last_history_id)
     end
 
-    rest_mails_replied_by_you = Message.where(from_mail: user.email)
-                                       .where("message_protocol_id NOT IN (?)", user.messages.pluck(:message_protocol_id))
+    rest_mails_replied_by_you = MsgEntity.where(from_mail: user.email)
+                                         .where("message_protocol_id NOT IN (?)", user.messages.joins(:msg_entity).pluck(:message_protocol_id))
 
     batch = Google::APIClient::BatchRequest.new
     rest_mails_replied_by_you.each do |mail_replied_by_you|

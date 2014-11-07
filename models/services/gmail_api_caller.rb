@@ -12,8 +12,8 @@ class GmailApiCaller
         if thread["messages"]
           begin
             thread["messages"].each do |msg|
-              msg_record = user.messages.find_or_initialize_by(mail_id: msg["id"])
-              msg_record.update_with_msg!(msg)
+              gmail_entity = user.messages.find_or_initialize_by(mail_id: msg["id"])
+              gmail_entity.update_with_msg!(msg)
             end
           rescue => e
             puts e

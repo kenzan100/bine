@@ -6,6 +6,8 @@ ActiveRecord::Base.establish_connection(ENV['RACK_ENV'].to_sym)
 use ActiveRecord::ConnectionAdapters::ConnectionManagement
 use Rack::MiniProfiler if development?
 
+ALLOWED_DOMAINS = ENV['ALLOWED_DOMAINS'].split(',')
+
 def api_client; settings.api_client end
 def gmail_api; settings.gmail end
 def oauth_api; settings.oauth2 end
@@ -78,6 +80,9 @@ get '/oauth2callback' do
                                  parameters: { 'fields' => 'email' },
                                  authorization: user_credentials)
   email_address = JSON.parse(user_info.body)["email"]
+  unless ALLOWED_DOMAINS.include? email_address.match(/@(.+)/)[1]
+    return "申し訳ありません。あなたのメールアドレスは、許可されたドメインに含まれていません。"
+  end
   user = User.find_or_initialize_by(email: email_address)
   if user_credentials.refresh_token && user_credentials.expired?
     user_credentials.fetch_access_token!

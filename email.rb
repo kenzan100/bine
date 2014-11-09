@@ -47,7 +47,7 @@ configure do
 end
 
 before do
-  pass if %w(logout auto_update).include? request.path_info.split('/')[1]
+  pass if %w(logout auto_update post_to_slack).include? request.path_info.split('/')[1]
   unless user_credentials.access_token || request.path_info =~ /\A\/oauth2/
     redirect to('/oauth2authorize')
   end
@@ -99,11 +99,7 @@ get '/oauth2callback' do
   end
 end
 
-get '/' do
-  @user_id = params[:user_id]
-  user = User.find_by_id(params[:user_id]) || current_user
-  @current_user = user
-  @whose_inbox = params[:q] || "new"
+def inbox_status(user=nil)
   @inboxes = {}
   user_emails = User.pluck(:email)
   @inboxes["new"] = {}
@@ -120,8 +116,9 @@ get '/' do
                           else
                             MsgEntity.where("from_mail NOT IN (?)", ignoring_mails)
                           end
+
   gmail_entities = msgs_without_ignoring.includes(gmail_entities: [:user]).map do |msg|
-    msg.gmail_entities.detect{|g| g.user_id == user.id} || msg.gmail_entities.first
+    msg.gmail_entities.detect{|g| g.user_id == (user && user.id)} || msg.gmail_entities.first
   end
 
   gmail_entities.sort_by{|g| g.msg_entity.sent_date }.reverse.group_by{|g|
@@ -130,7 +127,7 @@ get '/' do
     msgs = g_entities.sort_by{|g| g.msg_entity.sent_date}
     thread = {}
     thread[:info] = {}
-    if your_msg = msgs.detect{|msg| msg.user_id == user.id}
+    if your_msg = msgs.detect{|msg| msg.user_id == (user && user.id)}
       thread[:info][:id] = your_msg.thread_id
     end
     thread[:info][:shared_user_emails] = msgs.map{|msg| msg.msg_entity.gmail_entities.map{|g| g.user.email}}.flatten.uniq
@@ -148,25 +145,38 @@ get '/' do
       @inboxes["new"][:ongoings] << thread
     end
   end
+end
 
-  if params[:post_to_slack]
-    fields_text_arr = @inboxes.map{|k,v| {title: k, value: "#{v[:ongoings].count}件の要対応メッセージ"} }
-    primary_text = "<#{ENV['SERVICE_URL']}|メールボックスに要対応メッセージがあります>"
-    posting_json = {
-      fallback: primary_text,
-      pretext:  primary_text,
-      color: 'warning',
-      fields: fields_text_arr
-    }.to_json
-    uri = URI.parse ENV['SLACK_WEBHOOK_URL']
-    req = Net::HTTP::Post.new(uri.request_uri, {'Content-Type' =>'application/json'})
-    req.body = posting_json
-    http = Net::HTTP.new(uri.host, uri.port)
-    http.use_ssl = true
-    http.verify_mode = OpenSSL::SSL::VERIFY_NONE
-    http.start{|h| h.request(req)}
-    return "posted to slack"
-  end
+get '/post_to_slack' do
+  inbox_status
+
+  fields_text_arr = @inboxes.select{|k,v| v[:ongoings].count > 0}
+                            .map{|k,v| {title: k, value: "#{v[:ongoings].count}件の要対応メッセージ"} }
+  primary_text = "<#{ENV['SERVICE_URL']}|メールボックスに要対応メッセージがあります>"
+  posting_json = {
+    fallback: primary_text,
+    pretext:  primary_text,
+    color: 'warning',
+    fields: fields_text_arr
+  }.to_json
+  uri = URI.parse ENV['SLACK_WEBHOOK_URL']
+  req = Net::HTTP::Post.new(uri.request_uri, {'Content-Type' =>'application/json'})
+  req.body = posting_json
+  http = Net::HTTP.new(uri.host, uri.port)
+  http.use_ssl = true
+  http.verify_mode = OpenSSL::SSL::VERIFY_NONE
+  http.start{|h| h.request(req)}
+
+  "posted to slack"
+end
+
+get '/' do
+  @user_id = params[:user_id]
+  user = User.find_by_id(params[:user_id]) || current_user
+  @current_user = user
+  @whose_inbox = params[:q] || "new"
+
+  inbox_status(user)
 
   @time = Time.now
   @time_til_next_sync = Time.mktime(@time.year,@time.month,@time.day,@time.hour)+3600

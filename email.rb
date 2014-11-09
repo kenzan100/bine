@@ -152,6 +152,9 @@ get '/post_to_slack' do
 
   fields_text_arr = @inboxes.select{|k,v| v[:ongoings].count > 0}
                             .map{|k,v| {title: k, value: "#{v[:ongoings].count}件の要対応メッセージ"} }
+  if fields_text_arr.empty?
+    return "every mail is handled well. yay!"
+  end
   primary_text = "<#{ENV['SERVICE_URL']}|メールボックスに要対応メッセージがあります>"
   posting_json = {
     fallback: primary_text,

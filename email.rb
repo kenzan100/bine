@@ -149,6 +149,25 @@ get '/' do
     end
   end
 
+  if params[:post_to_slack]
+    fields_text_arr = @inboxes.map{|k,v| {title: k, value: "#{v[:ongoings].count}件の要対応メッセージ"} }
+    primary_text = "<#{ENV['SERVICE_URL']}|メールボックスに要対応メッセージがあります>"
+    posting_json = {
+      fallback: primary_text,
+      pretext:  primary_text,
+      color: 'warning',
+      fields: fields_text_arr
+    }.to_json
+    uri = URI.parse ENV['SLACK_WEBHOOK_URL']
+    req = Net::HTTP::Post.new(uri.request_uri, {'Content-Type' =>'application/json'})
+    req.body = posting_json
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.use_ssl = true
+    http.verify_mode = OpenSSL::SSL::VERIFY_NONE
+    http.start{|h| h.request(req)}
+    return "posted to slack"
+  end
+
   @time = Time.now
   @time_til_next_sync = Time.mktime(@time.year,@time.month,@time.day,@time.hour)+3600
   erb :news

@@ -99,54 +99,6 @@ get '/oauth2callback' do
   end
 end
 
-def inbox_status(user=nil)
-  @inboxes = {}
-  user_emails = User.pluck(:email)
-  @inboxes["new"] = {}
-  @inboxes["new"][:ongoings] = []
-  user_emails.each do |email|
-    @inboxes[email] = {}
-    @inboxes[email][:ongoings] = []
-    @inboxes[email][:resolved] = []
-  end
-
-  ignoring_mails = MsgEntity.where("ignored_at IS NOT NULL").pluck(:from_mail).uniq
-  msgs_without_ignoring = if ignoring_mails.empty?
-                            MsgEntity
-                          else
-                            MsgEntity.where("from_mail NOT IN (?)", ignoring_mails)
-                          end
-
-  gmail_entities = msgs_without_ignoring.includes(gmail_entities: [:user]).map do |msg|
-    msg.gmail_entities.detect{|g| g.user_id == (user && user.id)} || msg.gmail_entities.first
-  end
-
-  gmail_entities.sort_by{|g| g.msg_entity.sent_date }.reverse.group_by{|g|
-    g.msg_entity.subject && g.msg_entity.subject.gsub(/[\s|　]/,'').gsub(/^(Re:)+/i,'')
-  }.each do |subject, g_entities|
-    msgs = g_entities.sort_by{|g| g.msg_entity.sent_date}
-    thread = {}
-    thread[:info] = {}
-    if your_msg = msgs.detect{|msg| msg.user_id == (user && user.id)}
-      thread[:info][:id] = your_msg.thread_id
-    end
-    thread[:info][:shared_user_emails] = msgs.map{|msg| msg.msg_entity.gmail_entities.map{|g| g.user.email}}.flatten.uniq
-    thread[:msgs] = msgs
-    if replied_user_email = GmailEntity.who_replied(msgs, user_emails)
-      thread[:info][:assigned_to] = replied_user_email
-    end
-    if replied_user_email
-      if replied_user_email == msgs.last.msg_entity.from_mail
-        @inboxes[replied_user_email][:resolved] << thread
-      else
-        @inboxes[replied_user_email][:ongoings] << thread
-      end
-    else
-      @inboxes["new"][:ongoings] << thread
-    end
-  end
-end
-
 get '/post_to_slack' do
   inbox_status
 
@@ -184,6 +136,12 @@ get '/' do
   @time = Time.now
   @time_til_next_sync = Time.mktime(@time.year,@time.month,@time.day,@time.hour)+3600
   erb :news
+end
+
+get '/senders' do
+  @current_user = current_user
+  @ignoring_msgs = MsgEntity.all.order('sent_date DESC')
+  erb :ignorings
 end
 
 # [TODO] メッセージ全体のインポートの保存期間を設定して、
@@ -319,9 +277,58 @@ get '/import' do
   GmailApiCaller.save_thread_get_batch_res(result, user)
   user.latest_thread_history_id = thread_list_response["threads"].first["historyId"]
   user.last_thread_next_page_token = thread_list_response["nextPageToken"]
+  user.reload
   user.save!
 
   redirect '/'
+end
+
+def inbox_status(user=nil)
+  @inboxes = {}
+  user_emails = User.pluck(:email)
+  @inboxes["new"] = {}
+  @inboxes["new"][:ongoings] = []
+  user_emails.each do |email|
+    @inboxes[email] = {}
+    @inboxes[email][:ongoings] = []
+    @inboxes[email][:resolved] = []
+  end
+
+  ignoring_mails = MsgEntity.where("ignored_at IS NOT NULL").pluck(:from_mail).uniq
+  msgs_without_ignoring = if ignoring_mails.empty?
+                            MsgEntity
+                          else
+                            MsgEntity.where("from_mail NOT IN (?)", ignoring_mails)
+                          end
+
+  gmail_entities = msgs_without_ignoring.includes(gmail_entities: [:user]).map do |msg|
+    msg.gmail_entities.detect{|g| g.user_id == (user && user.id)} || msg.gmail_entities.first
+  end
+
+  gmail_entities.sort_by{|g| g.msg_entity.sent_date }.reverse.group_by{|g|
+    g.msg_entity.subject && g.msg_entity.subject.gsub(/[\s|　]/,'').gsub(/^(Re:)+/i,'')
+  }.each do |subject, g_entities|
+    msgs = g_entities.sort_by{|g| g.msg_entity.sent_date}
+    thread = {}
+    thread[:info] = {}
+    if your_msg = msgs.detect{|msg| msg.user_id == (user && user.id)}
+      thread[:info][:id] = your_msg.thread_id
+    end
+    thread[:info][:shared_user_emails] = msgs.map{|msg| msg.msg_entity.gmail_entities.map{|g| g.user.email}}.flatten.uniq
+    thread[:msgs] = msgs
+    if replied_user_email = GmailEntity.who_replied(msgs, user_emails)
+      thread[:info][:assigned_to] = replied_user_email
+    end
+    if replied_user_email
+      if replied_user_email == msgs.last.msg_entity.from_mail
+        @inboxes[replied_user_email][:resolved] << thread
+      else
+        @inboxes[replied_user_email][:ongoings] << thread
+      end
+    else
+      @inboxes["new"][:ongoings] << thread
+    end
+  end
 end
 
 def fetch_latest_msgs(user)
